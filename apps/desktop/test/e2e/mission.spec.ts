@@ -29,8 +29,17 @@ test('a mission plans, builds in parallel, reviews, checks and ships', async () 
   await mc.getByRole('button', { name: 'Stop' }).click();
   await expect(mc.getByRole('button', { name: 'Test', exact: true })).toBeVisible();
 
+  await mc.getByLabel('Change request').fill('Also add t3');
+  await mc.getByRole('button', { name: 'Send' }).click();
+  await expect(mc.getByText('Change to: A tiny page that shows two files.')).toBeVisible();
+  await expect(mc.getByRole('list', { name: 'Missions' }).getByText('done')).toHaveCount(2, { timeout: 30_000 });
+  await shot(page, '10b-change');
+  page.once('dialog', (d) => void d.accept());
+  await mc.getByRole('button', { name: 'Undo' }).click();
+  await expect(mc.getByText('undone', { exact: true })).toBeVisible();
+
   await page.getByRole('navigation', { name: 'Dock' }).getByRole('button', { name: 'Timeline' }).click();
   const tl = page.getByRole('dialog', { name: 'Timeline' });
   await expect(tl.getByText('Shipped.')).toBeVisible();
-  await expect(tl.getByText(/planned 2 task/)).toBeVisible();
+  await expect(tl.getByText(/planned 1 task/)).toBeVisible();
 });

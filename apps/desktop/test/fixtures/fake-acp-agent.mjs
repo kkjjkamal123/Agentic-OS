@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Deterministic ACP agent for tests: echoes prompts, exercises thoughts, tools, permissions and usage.
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION, RequestError } from '@agentclientprotocol/sdk';
@@ -39,6 +40,13 @@ new AgentSideConnection(
         }));
         return say('```json\n' + JSON.stringify({ assign }) + '\n```');
       }
+      if (text.includes('Make a build plan') && text.includes('This is a change request')) {
+        return say('```json\n' + JSON.stringify({
+          summary: 'Add t3.',
+          tasks: [{ id: 't3', title: 'Write t3', spec: 'Create t3.txt', files: ['t3.txt'], deps: [], acceptance: ['t3.txt exists'], complexity: 'light' }],
+          verify: { test: 'test -f t3.txt' },
+        }) + '\n```');
+      }
       if (text.includes('Make a build plan')) {
         const impossible = text.includes('impossible');
         return say('```json\n' + JSON.stringify({
@@ -54,6 +62,13 @@ new AgentSideConnection(
         }) + '\n```');
       }
       const task = text.match(/Your task \((t\d+)\)/);
+      // First attempt at t1 loses the connection; the retry (same worktree) succeeds.
+      const dropMark = join(tmpdir(), `aos-dropnet-${process.cwd().replace(/\W/g, '_')}`);
+      if (task?.[1] === 't1' && text.includes('DROPNET') && !existsSync(dropMark)) {
+        writeFileSync(dropMark, '');
+        throw RequestError.internalError({ message: 'fetch failed: getaddrinfo ENOTFOUND api.example.com' });
+      }
+      if (task && text.includes('SLOWTASK')) await new Promise((r) => setTimeout(r, 1500));
       if (task) {
         writeFileSync(join(process.cwd(), `${task[1]}.txt`), `${task[1]} by fake\n`);
         if (task[1] === 't1') writeFileSync(join(process.cwd(), 'index.html'), '<!doctype html><title>Fake app</title><h1>Fake app is live</h1>\n');

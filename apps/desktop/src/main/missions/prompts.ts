@@ -9,20 +9,27 @@ const OUTPUT_TAIL = 6_000;
 const list = (xs: string[]) => (xs.length ? xs.map((x) => `- ${x}`).join('\n') : '- (none)');
 const tail = (s: string, n: number) => (s.length > n ? `…${s.slice(-n)}` : s);
 
-export function planPrompt(goal: string, files: string[]): string {
-  return `Goal: ${goal}
+export function planPrompt(goal: string, files: string[], parent?: Mission): string {
+  const change = parent
+    ? `This is a change request on a finished product: ${parent.product ?? parent.goal}
+${parent.summary ? `How it was built: ${parent.summary}\n` : ''}Plan only the work this change needs, reusing the existing code. Keep "run" the same unless the change requires otherwise.
+
+`
+    : '';
+  return `${change}${parent ? 'Change' : 'Goal'}: ${goal}
 
 Existing files:
 ${files.length ? files.join('\n') : '(empty repository)'}
 
 Make a build plan for a finished product the user opens with one click. Do not create or change files.
 Reply with ONE json block:
-{"product":"what the user gets, one sentence","stack":"languages and frameworks","summary":"approach and key decisions","tasks":[{"id":"t1","title":"...","spec":"what to build, files to create/touch, interfaces other tasks rely on","deps":[],"acceptance":["checkable outcome"],"complexity":"light|normal|hard"}],"verify":{"setup":"install command or empty","build":"build command or empty","test":"test command"},"run":{"kind":"web|macos-app|cli","open":"file or .app to open, relative path","start":"long-running start command","url":"http://localhost:PORT"}}
+{"product":"what the user gets, one sentence","stack":"languages and frameworks","summary":"approach and key decisions","tasks":[{"id":"t1","title":"...","spec":"what to build, files to create/touch, interfaces other tasks rely on","files":["paths this task creates or edits"],"deps":[],"acceptance":["checkable outcome"],"complexity":"light|normal|hard"}],"verify":{"setup":"install command or empty","build":"build command or empty","test":"test command"},"run":{"kind":"web|macos-app|cli","open":"file or .app to open, relative path","start":"long-running start command","url":"http://localhost:PORT"}}
 
 Rules:
 - Games and apps with any UI must be graphical, never terminal-only, unless the goal explicitly asks for a CLI. Default to a polished single-page web app (index.html + CSS + JS, no build step, no network dependencies) with keyboard and mouse controls; use a native macOS app only if the goal asks for one.
 - run says how to launch the finished product: web with no server -> {"kind":"web","open":"index.html"}; web with a server -> {"kind":"web","start":"...","url":"http://localhost:PORT"}; macOS app -> {"kind":"macos-app","open":"path/To.app"} built by verify.build; CLI tools -> {"kind":"cli","start":"command"}.
 - 1-8 tasks, each small enough for one agent. Prefer independent tasks; add deps only when a task needs another's code.
+- Each file has one owner: tasks that can run at the same time never list the same file. If two tasks must touch one file, make one depend on the other.
 - Make it look and feel finished: clear layout, readable typography, win/lose or empty/error states, no placeholder text.
 - complexity decides which model builds the task: light = config, boilerplate, docs, small edits; normal = a typical feature; hard = tricky logic, concurrency, security, performance or cross-cutting design.
 - verify commands run non-interactively from the repo root on macOS, finish within minutes, exit non-zero on failure. Include at least one real automated test of the core logic.`;
@@ -34,7 +41,7 @@ const who = (r?: ModelRef) => (r ? `${r.runtime}/${r.model.replace(/^google-anti
 export function teamBrief(m: Mission, self: MissionTask): string {
   return m.tasks
     .filter((t) => t.id !== self.id)
-    .map((t) => `- ${t.id} ${t.title} [${t.status}] ${who(t.coder ?? t.plannedCoder)}`)
+    .map((t) => `- ${t.id} ${t.title} [${t.status}] ${who(t.coder ?? t.plannedCoder)}${t.files?.length ? ` owns ${t.files.join(', ')}` : ''}`)
     .join('\n');
 }
 
@@ -69,7 +76,7 @@ ${t.spec}
 
 Acceptance:
 ${list(t.acceptance)}
-${team ? `\nTeam (parallel, separate branches; do not do their work):\n${team}\n` : ''}${handoffs ? `\nHand-offs from tasks you build on:\n${handoffs}\n` : ''}
+${t.files?.length ? `\nFiles you own: ${t.files.join(', ')}. Edit other files only if the task cannot work otherwise.\n` : ''}${team ? `\nTeam (parallel, separate branches; do not do their work):\n${team}\n` : ''}${handoffs ? `\nHand-offs from tasks you build on:\n${handoffs}\n` : ''}
 Files in repo:
 ${files.length ? files.join('\n') : '(empty)'}
 ${conflictNote ? `\n${conflictNote}\n` : ''}

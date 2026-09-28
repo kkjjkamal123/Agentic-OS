@@ -188,14 +188,16 @@ export function rank(role: Role, catalogs: RuntimeCatalog[], opts: RouteOpts = {
 
 export const route = (role: Role, catalogs: RuntimeCatalog[], opts: RouteOpts = {}): Routed | null => rank(role, catalogs, opts)[0] ?? null;
 
+const NETWORK_RE = /fetch failed|ENOTFOUND|EAI_AGAIN|ENETUNREACH|ENETDOWN|EHOSTUNREACH|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT|socket hang up|getaddrinfo|network (error|is unreachable|connection)|internet connection|could not resolve host|connection (reset|closed|error|lost|timed out)|you are offline|stream disconnected/i;
 const LIMIT_RE = /rate.?limit|usage limit|quota|limit reached|too many requests|\b429\b|overloaded|resource.?exhausted|exceeded/i;
 const CREDIT_RE = /more credits|insufficient (credits|funds|balance)|billing|payment required|\b402\b/i;
 const MODEL_RE = /not found|does not exist|no access|not supported|requires a newer version|age confirmation|attestation|not available|unknown model|invalid model|\b40[34]\b/i;
 
-export type Failure = 'limit' | 'credits' | 'model' | 'other';
+export type Failure = 'network' | 'limit' | 'credits' | 'model' | 'other';
 
-/** What a provider error means for routing: rest the pool, or drop just this model. */
+/** What a provider error means for routing: wait for the connection, rest the pool, or drop just this model. */
 export function classifyError(message: string): Failure {
+  if (NETWORK_RE.test(message)) return 'network';
   if (CREDIT_RE.test(message)) return 'credits';
   if (LIMIT_RE.test(message)) return 'limit';
   if (MODEL_RE.test(message)) return 'model';
@@ -203,3 +205,5 @@ export function classifyError(message: string): Failure {
 }
 
 export const isLimitError = (message: string) => classifyError(message) === 'limit';
+/** Another model can help; a lost connection or a bug in the task can't be fixed by switching. */
+export const shouldSwitch = (message: string) => ['limit', 'credits', 'model'].includes(classifyError(message));

@@ -19,6 +19,8 @@ export interface LauncherDeps {
   openApp: OpenApp;
   send: (s: TestState) => void;
   terminal?: (command: string) => Promise<void>;
+  /** Loads a page hidden and returns the errors a user would see. */
+  probe?: (url: string) => Promise<string[]>;
 }
 
 async function waitFor(url: string, signal: AbortSignal): Promise<boolean> {
@@ -62,19 +64,25 @@ export class Launcher {
       if (run.kind === 'macos-app' && !(statSync(p).isDirectory() && existsSync(join(p, 'Contents', 'MacOS')))) {
         return { ok: false, output: `${run.open} is not a runnable .app bundle (missing Contents/MacOS).` };
       }
-      return { ok: true };
+      return run.kind === 'web' ? this.probe(pathToFileURL(p).href) : { ok: true };
     }
     if (run.kind === 'web' && run.start && run.url) {
       const abort = new AbortController();
       const id = this.d.feed.start(sessionId, 'Launch check', root, run.start);
       const proc = runSandboxed(run.start, root, await agentEnv(), { signal: abort.signal, timeoutMs: START_TIMEOUT_MS + 5_000, onData: (c) => this.d.feed.append(id, c) });
       const up = await waitFor(run.url, abort.signal);
+      const probed = up ? await this.probe(run.url) : null;
       abort.abort();
       const r = await proc;
       this.d.feed.finish(id, up ? 0 : (r.exitCode ?? 1));
-      return up ? { ok: true } : { ok: false, output: `Started \`${run.start}\` but ${run.url} never responded.\n${r.output.slice(-4000)}` };
+      return probed ?? { ok: false, output: `Started \`${run.start}\` but ${run.url} never responded.\n${r.output.slice(-4000)}` };
     }
     return { ok: true };
+  }
+
+  private async probe(url: string): Promise<{ ok: true } | { ok: false; output: string }> {
+    const errors = (await this.d.probe?.(url)) ?? [];
+    return errors.length ? { ok: false, output: `Opening the app showed these errors:\n${errors.map((e) => `- ${e}`).join('\n')}` } : { ok: true };
   }
 
   isRunning(id: string) {

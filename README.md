@@ -28,7 +28,15 @@ apps/desktop/          Electron app — the OS itself
 5. When it's done, click **▶ Test** to try the finished product live. Web apps open in a preview window, with their dev server started for you if they need one. Mac apps launch directly, and command-line tools open in Terminal. **Stop** shuts it down. The "What's being built" card shows the product, stack, how it runs, how long it took and the project size. Click a task to see its spec and acceptance criteria. If a mission failed, **Run again** continues from what was already built.
 6. The **Agents** window is for chatting with one model directly. It isn't needed for missions.
 
-Products are graphical by default: a game or app becomes a polished web app (plain HTML, CSS and JS, with no build step) unless you ask for a CLI or a native Mac app. Verification doesn't stop at a passing build. The product must actually launch (its entry file must exist, or its server must answer), and a failed launch goes back to the fixer.
+**Refine and recover:**
+- **Ask for changes.** Under a finished mission, describe a change ("add a hint button"). The planner sees the existing product and plans only what changes; the result keeps the same Test button. **Undo** puts the project back to the version before the newest change (saved as a new commit, so nothing is lost).
+- **Pause / Resume.** Pause stops after the agents' current step. No tokens are used while paused.
+- **Internet drops.** The mission pauses instead of failing or burning through fallback models, and you get a notification. It resumes by itself the moment macOS reports the network is back, retrying the same task on the same model from the files already written. **Resume now** retries immediately.
+- **Crashes and restarts.** A mission interrupted by quitting, a failure or Cancel can be **Resumed**. Finished tasks are kept and only the rest is redone.
+
+Products are graphical by default: a game or app becomes a polished web app (plain HTML, CSS and JS, with no build step) unless you ask for a CLI or a native Mac app. Verification doesn't stop at a passing build. The product must actually launch (its entry file must exist, or its server must answer). Web apps are then opened off-screen once, and any script error, missing file or blank page is sent back to the fixer, just as a user would have hit it.
+
+Parallel tasks each own their files (the plan says which), so merges rarely conflict.
 
 When the app isn't in front, you get a macOS notification if a mission finishes or fails, or if an agent needs your approval. Mission Control won't launch if no agent can plan right now; it tells you what to sign in to first.
 
@@ -76,3 +84,18 @@ Requires Node ≥ 24 on macOS. npm 11 blocks install scripts by default. Only `e
 - Gemini runs through Google's **Antigravity CLI (`agy`)** in headless mode, one process per turn, confined by the macOS sandbox. omp's `google-antigravity` models are the backup. Both draw on the same Antigravity quota, so the router treats them as one pool.
 
 Shortcuts: `⌘1`–`⌘6` open apps, `⌘,` opens Settings, `⌘W` closes the focused window. Double-click a title bar to maximize.
+
+## Ideas taken from other agentic tools
+
+What we borrowed, and how it fits Agentic OS's priorities (simple to operate, easy on the battery, careful with tokens):
+
+| Idea | Seen in | Here |
+|---|---|---|
+| Follow-up prompts on a live app, with version history | Lovable, bolt.diy, Dyad | Ask for changes + Undo (git-backed) |
+| Feed the app's own runtime errors back to the model | bolt.diy (WebContainer) | Hidden page probe in the launch check |
+| Resume from saved state after a crash or disconnect | OpenHands (event store replay), AGX checkpoints | Resume keeps merged tasks; offline pause auto-resumes |
+| One file, one owner for parallel agents | Addy Osmani, *The Code Agent Orchestra* | `files` per task in the plan |
+| Worktree per agent, reviewer ≠ author | parallel-code, Emdash, Claude Squad | Already core; cross-vendor review |
+| Zero-token coordination | bernstein | Scheduling, merging and checks are plain code; only the dispatcher is a (cheap) model call |
+
+Not adopted, on purpose: Kanban boards and multi-pane terminals (more to operate), mobile push relays (always-on network), GPU-accelerated terminals (battery).

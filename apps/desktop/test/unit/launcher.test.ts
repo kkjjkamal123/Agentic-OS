@@ -35,6 +35,22 @@ describe('launch check (part of verification)', () => {
     expect(await l.check({ kind: 'web', open: 'index.html' }, root, 's')).toEqual({ ok: true });
   });
 
+  it('opens web pages hidden and fails on the errors a user would see', async () => {
+    const root = tmp();
+    writeFileSync(join(root, 'index.html'), '<h1>hi</h1>');
+    const probed: string[] = [];
+    const l = new Launcher({
+      feed: new TerminalFeed(() => {}),
+      show: () => ({ close() {} }),
+      openApp: async () => {},
+      send: () => {},
+      probe: async (url) => (probed.push(url), ['Uncaught ReferenceError: words is not defined (app.js:12)']),
+    });
+    const r = await l.check({ kind: 'web', open: 'index.html' }, root, 's');
+    expect(probed[0]).toMatch(/^file:.*index\.html$/);
+    expect(r).toMatchObject({ ok: false, output: expect.stringContaining('words is not defined') });
+  });
+
   it('requires a real .app bundle for Mac apps', async () => {
     const root = tmp();
     const { l } = setup();

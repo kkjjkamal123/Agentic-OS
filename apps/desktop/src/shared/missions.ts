@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { ModelRef, Usage } from './agents';
 
 export type TaskStatus = 'queued' | 'coding' | 'reviewing' | 'fixing' | 'merging' | 'done' | 'failed' | 'cancelled';
-export type MissionStatus = 'planning' | 'building' | 'verifying' | 'shipping' | 'done' | 'failed' | 'cancelled';
+export type MissionStatus = 'planning' | 'building' | 'verifying' | 'shipping' | 'paused' | 'done' | 'failed' | 'cancelled';
 export type Stage = 'plan' | 'build' | 'review' | 'test' | 'ship';
 
 export interface MissionTask {
@@ -12,6 +12,8 @@ export interface MissionTask {
   deps: string[];
   acceptance: string[];
   complexity: 'light' | 'normal' | 'hard';
+  /** Files this task owns; parallel tasks never share one, which keeps merges clean. */
+  files?: string[];
   status: TaskStatus;
   coder?: ModelRef;
   reviewer?: ModelRef;
@@ -60,6 +62,15 @@ export interface Mission {
   quality: 'saver' | 'balanced' | 'max';
   status: MissionStatus;
   stage: Stage;
+  /** Set while paused, or while a requested pause waits for the current step to finish. */
+  pause?: { reason: 'offline' | 'user'; since: string };
+  /** The mission this one changes (a follow-up request on the same product). */
+  parentId?: string;
+  /** main before and after this mission: the version it can be undone to. */
+  baseCommit?: string;
+  headCommit?: string;
+  undone?: boolean;
+  resumes?: number;
   summary?: string;
   /** What the user gets, in one sentence. */
   product?: string;
@@ -101,6 +112,7 @@ export const PlanSchema = z.object({
         deps: z.array(z.string()).default([]),
         acceptance: z.array(z.string()).default([]),
         complexity: z.enum(['light', 'normal', 'hard']).catch('normal'),
+        files: z.array(z.string().max(300)).max(60).optional(),
       }),
     )
     .min(1)
@@ -127,6 +139,7 @@ export const MissionStartSchema = z
     goal: z.string().trim().min(3).max(8000),
     workspaceId: z.string().uuid().optional(),
     quality: z.enum(['saver', 'balanced', 'max']).optional(),
+    parentId: z.string().uuid().optional(),
   })
   .strict();
 

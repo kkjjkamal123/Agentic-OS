@@ -15,9 +15,12 @@ interface MissionsState {
   cancel(id: string): Promise<void>;
   test(id: string): Promise<void>;
   stopTest(id: string): Promise<void>;
+  pause(id: string): Promise<void>;
+  resume(id: string): Promise<void>;
+  undo(id: string): Promise<void>;
 }
 
-export const ACTIVE = new Set(['planning', 'building', 'verifying', 'shipping']);
+export const ACTIVE = new Set(['planning', 'building', 'verifying', 'shipping', 'paused']);
 
 export const useMissions = create<MissionsState>((set, get) => ({
   missions: null,
@@ -59,6 +62,26 @@ export const useMissions = create<MissionsState>((set, get) => ({
   async stopTest(id) {
     await window.aos.missions.stopTest(id);
   },
+  async pause(id) {
+    await window.aos.missions.pause(id);
+  },
+  async resume(id) {
+    set({ error: null });
+    try {
+      const m = await window.aos.missions.resume(id);
+      if (m.id !== id) await get().select(m.id);
+    } catch (e) {
+      set({ error: ipcError(e) });
+    }
+  },
+  async undo(id) {
+    set({ error: null });
+    try {
+      await window.aos.missions.undo(id);
+    } catch (e) {
+      set({ error: ipcError(e) });
+    }
+  },
 }));
 
 if (typeof window !== 'undefined' && window.aos) {
@@ -73,5 +96,7 @@ if (typeof window !== 'undefined' && window.aos) {
     useMissions.setState((s) => (s.events[e.missionId] ? { events: { ...s.events, [e.missionId]: [...s.events[e.missionId], e] } } : s)),
   );
   window.aos.on('missions:test', (t) => useMissions.setState((s) => ({ tests: { ...s.tests, [t.missionId]: t } })));
+  // OS network events are free; they let a mission paused offline resume the moment Wi-Fi is back.
+  window.addEventListener('online', () => void window.aos.app.networkChanged());
   void useMissions.getState().load();
 }

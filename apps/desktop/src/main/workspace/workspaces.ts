@@ -129,6 +129,24 @@ export class Workspaces {
     return { files: files.length, lines, testFiles: files.filter((f) => /(^|\/)(tests?|__tests__|spec)\/|[._-](test|spec)\.[a-z]+$|^test_/i.test(f)).length };
   }
 
+  async head(path: string): Promise<string> {
+    return (await git(path, ['rev-parse', 'main'])).trim();
+  }
+
+  /** Makes main look exactly like `commit` again, recorded as a new commit so nothing is lost. */
+  async restore(path: string, commit: string, message: string) {
+    await git(path, ['read-tree', '-u', '--reset', commit]);
+    await this.commitAll(path, message);
+  }
+
+  /** Worktrees a killed or cancelled mission left behind (their branches carry the mission's short id). */
+  async pruneMissionWorktrees(id: string, short: string) {
+    const w = this.get(id);
+    await git(w.path, ['worktree', 'prune']).catch(() => {});
+    const out = await git(w.path, ['worktree', 'list', '--porcelain']).catch(() => '');
+    for (const m of out.matchAll(/^branch refs\/heads\/(task\/\S+)$/gm)) if (m[1].includes(`-${short}-`)) await this.removeWorktree(id, m[1]);
+  }
+
   async commitAll(path: string, message: string): Promise<boolean> {
     await git(path, ['add', '-A']);
     if (!(await git(path, ['status', '--porcelain'])).trim()) return false;

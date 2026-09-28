@@ -12,6 +12,7 @@ import type { AgentManager } from './agents/manager';
 import type { Catalog } from './agents/catalog';
 import type { Missions } from './missions/orchestrator';
 import type { Launcher } from './missions/launcher';
+import type { Connectivity } from './net';
 import type { SecretStore } from './store/secrets';
 import type { Gate } from './tools/gate';
 import type { TerminalFeed } from './tools/terminal';
@@ -33,6 +34,7 @@ export interface Services {
   missions: Missions;
   launcher: Launcher;
   encryption: AppInfo['encryption'];
+  connectivity: Connectivity;
 }
 
 const AccountArg = z.enum(ACCOUNTS.map((a) => a.id) as [string, ...string[]]);
@@ -63,6 +65,7 @@ export function registerIpc(s: Services) {
         userData: app.getPath('userData'),
         encryption: s.encryption,
       }),
+      networkChanged: async () => s.connectivity.changed(),
     },
     settings: {
       get: async () => s.settings.get(),
@@ -111,6 +114,9 @@ export function registerIpc(s: Services) {
         await s.launcher.test(m, s.workspaces.get(m.workspaceId).path);
       },
       stopTest: async (id) => s.launcher.stop(IdArg.parse(id)),
+      pause: async (id) => s.missions.pause(IdArg.parse(id)),
+      resume: async (id) => s.missions.resume(IdArg.parse(id)),
+      undo: async (id) => s.missions.undo(IdArg.parse(id)),
     },
     approvals: {
       list: async () => s.gate.list(),

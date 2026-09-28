@@ -9,6 +9,7 @@ import { Catalog } from '../../src/main/agents/catalog';
 import { AgentManager } from '../../src/main/agents/manager';
 import { Launcher } from '../../src/main/missions/launcher';
 import { extractJson, Missions } from '../../src/main/missions/orchestrator';
+import type { Net } from '../../src/main/net';
 import { openDb } from '../../src/main/store/db';
 import { insecureDevEncryptor, SecretStore } from '../../src/main/store/secrets';
 import { SettingsStore } from '../../src/main/store/settings';
@@ -18,7 +19,7 @@ import { git, Workspaces } from '../../src/main/workspace/workspaces';
 
 const FAKE = join(import.meta.dirname, '../fixtures/fake-acp-agent.mjs');
 
-function setup() {
+function setup(opts: { net?: Net } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'aos-mission-'));
   const db = openDb(':memory:');
   const settings = new SettingsStore(db, defaultSettings('/h'));
@@ -32,7 +33,7 @@ function setup() {
   const updates: Mission[] = [];
   const events: MissionEvent[] = [];
   const launcher = new Launcher({ feed, show: () => ({ close: () => {} }), openApp: async () => {}, send: () => {} });
-  const missions = new Missions({ db, agents, workspaces, gate, feed, settings, launcher, send: (m) => updates.push(m), event: (e) => events.push(e), workspacesChanged: () => {} });
+  const missions = new Missions({ db, agents, workspaces, gate, feed, settings, launcher, net: opts.net, send: (m) => updates.push(m), event: (e) => events.push(e), workspacesChanged: () => {} });
   const finished = (id: string) =>
     new Promise<Mission>((resolve) => {
       const t = setInterval(() => {
@@ -163,5 +164,78 @@ describe('dispatcher and team communication', () => {
     const review = prompts.find((p) => p.includes('Review the change for task "Write t2"'))!;
     expect(review).toMatch(/Coder's note: DONE: wrote t2\.txt/);
     expect(prompts.find((p) => p.includes('Write the ship report'))).toMatch(/Write t1: done · DONE: wrote t1\.txt/);
+  }, 60_000);
+});
+
+const until = async (fn: () => boolean, ms = 20_000) => {
+  const end = Date.now() + ms;
+  while (!fn()) {
+    if (Date.now() > end) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 25));
+  }
+};
+
+describe('Missions: pause, resume, follow-ups and undo', () => {
+  it('pauses when the internet drops, then resumes the same task on the same model', async () => {
+    let up = false;
+    let reconnect = () => {};
+    const net: Net = { online: async () => up, waitOnline: (signal) => new Promise((r) => { reconnect = r; signal.addEventListener('abort', () => r()); }) };
+    const { missions, updates, events, finished } = setup({ net });
+    const m0 = await missions.start({ goal: 'Make two files DROPNET' });
+    await until(() => updates.some((m) => m.id === m0.id && m.status === 'paused' && m.pause?.reason === 'offline'));
+    up = true;
+    reconnect();
+    const m = await finished(m0.id);
+    expect(m.status).toBe('done');
+    expect(m.pause).toBeUndefined();
+    expect(events.some((e) => e.text.startsWith('Connection lost'))).toBe(true);
+    expect(events.some((e) => e.kind === 'switch')).toBe(false);
+  }, 60_000);
+
+  it('Pause waits for the current step, Resume continues', async () => {
+    const { missions, updates, finished } = setup();
+    const m0 = await missions.start({ goal: 'Make two files SLOWTASK' });
+    await until(() => missions.get(m0.id).tasks.some((t) => t.status === 'coding'));
+    missions.pause(m0.id);
+    expect(missions.get(m0.id).pause?.reason).toBe('user');
+    await until(() => missions.get(m0.id).status === 'paused');
+    const frozen = JSON.stringify(missions.get(m0.id).tasks.map((t) => t.status));
+    await new Promise((r) => setTimeout(r, 600));
+    expect(JSON.stringify(missions.get(m0.id).tasks.map((t) => t.status))).toBe(frozen);
+    await missions.resume(m0.id);
+    const m = await finished(m0.id);
+    expect(m.status).toBe('done');
+    expect(updates.some((x) => x.status === 'paused')).toBe(true);
+  }, 60_000);
+
+  it('Resume continues a cancelled mission from its finished tasks', async () => {
+    const { missions, events, finished } = setup();
+    const m0 = await missions.start({ goal: 'Make two files SLOWTASK' });
+    await until(() => missions.get(m0.id).tasks[0]?.status === 'done');
+    missions.cancel(m0.id);
+    expect((await finished(m0.id)).status).toBe('cancelled');
+    await missions.resume(m0.id);
+    const m = await finished(m0.id);
+    expect(m.status).toBe('done');
+    expect(m.resumes).toBe(1);
+    expect(events.some((e) => e.text === 'Resumed: 1/2 tasks already done.')).toBe(true);
+  }, 60_000);
+
+  it('a change request builds on the product, and Undo restores the previous version', async () => {
+    const { missions, workspaces, finished } = setup();
+    const parent = await finished((await missions.start({ goal: 'Make two text files' })).id);
+    const ws = workspaces.get(parent.workspaceId);
+    const child = await finished((await missions.start({ goal: 'Also add t3', workspaceId: parent.workspaceId, parentId: parent.id })).id);
+    expect(child.status).toBe('done');
+    expect(child.run).toEqual(parent.run);
+    expect(child.tasks[0].files).toEqual(['t3.txt']);
+    expect(existsSync(join(ws.path, 't3.txt'))).toBe(true);
+
+    await expect(missions.undo(parent.id)).rejects.toThrow(/Newer changes/);
+    await missions.undo(child.id);
+    expect(existsSync(join(ws.path, 't3.txt'))).toBe(false);
+    expect(existsSync(join(ws.path, 't1.txt'))).toBe(true);
+    expect(missions.get(child.id).undone).toBe(true);
+    expect(await git(ws.path, ['log', '-1', '--format=%s'])).toMatch(/^Undo: Also add t3/);
   }, 60_000);
 });

@@ -21,6 +21,8 @@ export interface AppInfo {
 export interface AosApi {
   app: {
     info(): Promise<AppInfo>;
+    /** The OS reported a network change; paused missions re-check the connection now. */
+    networkChanged(): Promise<void>;
   };
   settings: {
     get(): Promise<Settings>;
@@ -57,6 +59,11 @@ export interface AosApi {
     /** Launches the finished product: preview window, Mac app, or Terminal. */
     test(id: string): Promise<void>;
     stopTest(id: string): Promise<void>;
+    /** Pauses after the current step; resumes a paused mission, or continues a failed or interrupted one. */
+    pause(id: string): Promise<void>;
+    resume(id: string): Promise<Mission>;
+    /** Restores the project to how it was before this mission, as a new commit. */
+    undo(id: string): Promise<void>;
   };
   approvals: {
     list(): Promise<ApprovalRequest[]>;
@@ -92,12 +99,12 @@ export interface AosEvents {
 }
 
 export const INVOKE_CHANNELS = {
-  app: ['info'],
+  app: ['info', 'networkChanged'],
   settings: ['get', 'update'],
   accounts: ['list', 'openTerminal'],
   agents: ['catalog', 'route', 'start', 'prompt', 'cancel', 'stop'],
   workspaces: ['list', 'create', 'tree', 'read', 'diff', 'reveal', 'openTerminal'],
-  missions: ['list', 'events', 'start', 'cancel', 'test', 'stopTest'],
+  missions: ['list', 'events', 'start', 'cancel', 'test', 'stopTest', 'pause', 'resume', 'undo'],
   approvals: ['list', 'answer'],
   terminal: ['history'],
   secrets: ['list', 'set', 'remove'],

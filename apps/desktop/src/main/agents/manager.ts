@@ -17,7 +17,7 @@ import { AgySession } from './agy';
 import { CodexSession } from './codex';
 import { languageModel, NativeSession, type ApiRuntime } from './native';
 import { systemPrompt, type Policies } from './policies';
-import { classifyError, effortFor, poolOf, rank, route, type Complexity, type RouteOpts } from './router';
+import { classifyError, effortFor, poolOf, rank, route, shouldSwitch, type Complexity, type RouteOpts } from './router';
 
 const FLUSH_MS = 80;
 const IDLE_MS = 10 * 60_000;
@@ -227,7 +227,7 @@ export class AgentManager {
         let reply = '';
         await l.session.prompt(input, (e) => {
           if (e.t === 'text') reply += e.text;
-          if (e.t === 'error' && l.auto && attempt < MAX_SWITCHES && classifyError(e.message) !== 'other') {
+          if (e.t === 'error' && l.auto && attempt < MAX_SWITCHES && shouldSwitch(e.message)) {
             held = e.message;
             this.onFailure(l, e.message);
             return;

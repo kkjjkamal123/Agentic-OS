@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelInfo, RuntimeCatalog } from '@shared/agents';
-import { classifyError, isLimitError, paramsB, poolOf, rank, route } from '../../src/main/agents/router';
+import { classifyError, isLimitError, paramsB, poolOf, rank, route, shouldSwitch } from '../../src/main/agents/router';
 
 const cat = (runtime: RuntimeCatalog['runtime'], models: (string | ModelInfo)[], available = true): RuntimeCatalog => ({
   runtime, available, models: models.map((m) => (typeof m === 'string' ? { id: m, name: m } : m)),
@@ -91,6 +91,10 @@ describe('spreading and failures', () => {
 
   it('classifies real provider errors', () => {
     expect(classifyError('This request requires more credits, or fewer max_tokens.')).toBe('credits');
+    expect(classifyError('fetch failed: getaddrinfo ENOTFOUND api.anthropic.com')).toBe('network');
+    expect(classifyError('API Error: Connection error. (socket hang up)')).toBe('network');
+    expect(shouldSwitch('fetch failed')).toBe(false);
+    expect(shouldSwitch('429 Too Many Requests')).toBe(true);
     expect(classifyError('This model requires you to complete the following before use: 18+ age confirmation.')).toBe('model');
     expect(classifyError("Function 'b0fcd392': Not found for account 'hU16'")).toBe('model');
     expect(classifyError("The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.")).toBe('model');

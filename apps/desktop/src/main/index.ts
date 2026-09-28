@@ -9,6 +9,8 @@ import { loadPolicies } from './agents/policies';
 import { broadcast, registerIpc } from './ipc';
 import { recordMission } from './missions/brain';
 import { Launcher } from './missions/launcher';
+import { probePage } from './missions/probe';
+import { Connectivity } from './net';
 import { Missions } from './missions/orchestrator';
 import { Gate } from './tools/gate';
 import { TerminalFeed } from './tools/terminal';
@@ -175,9 +177,12 @@ if (!app.requestSingleInstanceLock()) {
       show: previewWindow,
       openApp: async (p) => void (await shell.openPath(p)),
       send: (t) => broadcast('missions:test', t),
+      probe: probePage,
     });
+    const connectivity = new Connectivity();
     const missions = new Missions({
       launcher,
+      net: connectivity,
       db, agents, workspaces, gate, feed, settings,
       send: (m) => {
         broadcast('missions:changed', m);
@@ -186,13 +191,14 @@ if (!app.requestSingleInstanceLock()) {
         if (prev && prev !== m.status && ['done', 'failed'].includes(m.status)) {
           notify(m.status === 'done' ? 'Mission shipped' : 'Mission needs attention', `${m.goal.slice(0, 90)}${m.error ? `: ${m.error.slice(0, 80)}` : ''}`);
         }
+        if (prev && prev !== 'paused' && m.status === 'paused' && m.pause?.reason === 'offline') notify('Mission paused: no internet', 'It continues by itself when you are back online.');
       },
       event: (e) => broadcast('missions:event', e),
       workspacesChanged: () => broadcast('workspaces:changed', workspaces.list()),
       record: (m, path) => settings.get().recordToBrain && !fakeAgent && recordMission(m, path),
     });
     missions.recoverInterrupted();
-    registerIpc({ settings, secrets, accounts, catalog, agents, workspaces, gate, feed, missions, launcher, encryption: enc.kind });
+    registerIpc({ settings, secrets, accounts, catalog, agents, workspaces, gate, feed, missions, launcher, connectivity, encryption: enc.kind });
     createWindow();
 
     app.on('activate', () => {

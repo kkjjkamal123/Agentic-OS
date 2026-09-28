@@ -1,4 +1,4 @@
-import { AppWindow, Check, ChevronRight, FolderOpen, Globe, Loader2, Play, Plus, RotateCcw, Rocket, Square, SquareTerminal, Target, X } from 'lucide-react';
+import { AppWindow, Check, ChevronRight, CornerDownRight, FolderOpen, Globe, Loader2, Pause, Play, Plus, RotateCcw, Rocket, Send, Square, SquareTerminal, Target, Undo2, WifiOff, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { RUNTIMES, type ModelRef } from '@shared/agents';
 import { ACCOUNTS, type AccountStatus } from '@shared/accounts';
@@ -23,8 +23,9 @@ const SELECT = 'h-8 rounded-lg border border-line-strong bg-surface-solid px-2 t
 const model = (r?: ModelRef) => (r ? `${RUNTIMES[r.runtime].label} · ${r.model.replace(/^google-antigravity\//, '')}` : '');
 
 function StatusBadge({ status }: { status: Mission['status'] | MissionTask['status'] }) {
-  const tone = status === 'done' ? 'success' : status === 'failed' ? 'danger' : status === 'cancelled' || status === 'queued' ? 'neutral' : 'accent';
-  return <Badge tone={tone}>{ACTIVE.has(status) || ['coding', 'reviewing', 'fixing', 'merging'].includes(status) ? <Loader2 size={10} className="animate-spin" /> : null}{status}</Badge>;
+  const tone = status === 'done' ? 'success' : status === 'failed' ? 'danger' : status === 'paused' ? 'warning' : status === 'cancelled' || status === 'queued' ? 'neutral' : 'accent';
+  const spinning = status !== 'paused' && (ACTIVE.has(status) || ['coding', 'reviewing', 'fixing', 'merging'].includes(status));
+  return <Badge tone={tone}>{spinning ? <Loader2 size={10} className="animate-spin" /> : null}{status}</Badge>;
 }
 
 function GettingStarted() {
@@ -37,7 +38,7 @@ function GettingStarted() {
     ['Describe the result you want', 'Be concrete: platform, main features, "with tests". One goal per mission.'],
     ['Watch it work', 'Tasks show which model is coding and which is reviewing. Commands appear in Terminal and files in Files.'],
     ['Answer approvals', 'Anything outside the project, or a push or deploy, pops up top-right. Everything else runs on its own.'],
-    ['Open the result', 'When it ships, read the report and click Finder. If it fails, Run again continues from what was built.'],
+    ['Try it and refine it', 'When it ships, press Test to use it live, then Ask for changes. Undo reverts a change. If the internet drops, it pauses and resumes by itself.'],
   ];
   return (
     <div className="mt-8 grid gap-4 md:grid-cols-2" aria-label="Getting started">
@@ -156,7 +157,7 @@ function Stepper({ m }: { m: Mission }) {
   return (
     <ol className="flex items-center gap-1.5 text-xs" aria-label="Mission stages">
       {STAGES.map((s, i) => {
-        const active = !finished && ACTIVE.has(m.status) && (i === current || (s.id === 'review' && reviewing));
+        const active = !finished && ACTIVE.has(m.status) && m.status !== 'paused' && (i === current || (s.id === 'review' && reviewing));
         const done = finished || i < current || (s.id === 'review' && current > 2);
         return (
           <li key={s.id} className="flex items-center gap-1.5">
@@ -268,10 +269,63 @@ function About({ m }: { m: Mission }) {
   );
 }
 
+function PauseBanner({ m }: { m: Mission }) {
+  const resume = useMissions((s) => s.resume);
+  if (!m.pause) return null;
+  const offline = m.pause.reason === 'offline';
+  const waiting = m.status !== 'paused';
+  return (
+    <div role="status" className="flex items-center gap-3 rounded-xl border border-warning/40 bg-warning-soft p-3 text-[13px] text-warning">
+      {offline ? <WifiOff size={16} className="shrink-0" /> : <Pause size={16} className="shrink-0" />}
+      <div className="min-w-0 flex-1">
+        {offline ? 'No internet connection. Paused; it continues by itself when you are back online.' : waiting ? 'Pausing once the agents finish their current step…' : 'Paused. Nothing runs and no tokens are used until you resume.'}
+        <div className="text-xs opacity-80">Finished work is kept.</div>
+      </div>
+      <Button variant="primary" onClick={() => void resume(m.id)}><Play size={13} /> Resume{offline ? ' now' : ''}</Button>
+    </div>
+  );
+}
+
+function ChangeBox({ m }: { m: Mission }) {
+  const start = useMissions((s) => s.start);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const send = async () => {
+    setBusy(true);
+    await start({ goal: text.trim(), workspaceId: m.workspaceId, quality: m.quality, parentId: m.id });
+    setBusy(false);
+    setText('');
+  };
+  return (
+    <section className="rounded-xl border border-line p-3" aria-label="Ask for changes">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">Ask for changes</h3>
+      <div className="flex items-end gap-2">
+        <textarea
+          aria-label="Change request"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim().length > 2 && void send()}
+          rows={2}
+          placeholder="e.g. Add a hint button and a dark mode toggle"
+          className="min-w-0 flex-1 resize-none rounded-lg border border-line-strong bg-surface-solid p-2 text-[13px] text-fg placeholder:text-faint focus:border-accent focus:outline-none"
+        />
+        <Button variant="primary" disabled={text.trim().length < 3 || busy} onClick={() => void send()}><Send size={13} /> Send</Button>
+      </div>
+      <p className="mt-1.5 text-[11px] text-faint">Plans only what changes and builds it on top of this version. ⌘↩ to send.</p>
+    </section>
+  );
+}
+
 function Detail({ m }: { m: Mission }) {
   const cancel = useMissions((s) => s.cancel);
-  const start = useMissions((s) => s.start);
+  const pause = useMissions((s) => s.pause);
+  const resume = useMissions((s) => s.resume);
+  const undo = useMissions((s) => s.undo);
+  const missions = useMissions((s) => s.missions);
   const events = useMissions((s) => s.events[m.id]);
+  const actionError = useMissions((s) => s.error);
+  const parent = m.parentId ? missions?.find((x) => x.id === m.parentId) : undefined;
+  const newest = !missions?.some((x) => x.workspaceId === m.workspaceId && x.createdAt > m.createdAt && !x.undone);
   const live = ACTIVE.has(m.status);
   const done = m.tasks.filter((t) => t.status === 'done').length;
   return (
@@ -289,25 +343,39 @@ function Detail({ m }: { m: Mission }) {
           <span>· {m.usage.input.toLocaleString()} in / {m.usage.output.toLocaleString()} out{m.usage.cached ? ` / ${m.usage.cached.toLocaleString()} cached` : ''} tokens</span>
           <div className="ml-auto flex gap-1">
             <Button variant="ghost" onClick={() => void window.aos.workspaces.reveal(m.workspaceId)}><FolderOpen size={14} /> Finder</Button>
+            {live && !m.pause && <Button onClick={() => void pause(m.id)} title="Stop after the current step; nothing is lost"><Pause size={12} /> Pause</Button>}
             {live && <Button variant="danger" onClick={() => void cancel(m.id)}><Square size={12} /> Cancel</Button>}
             {!live && m.status !== 'done' && (
-              <Button onClick={() => void start({ goal: m.goal, workspaceId: m.workspaceId, quality: m.quality })} title="Plan the remaining work on top of what is already committed">
-                <RotateCcw size={13} /> Run again
+              <Button variant="primary" onClick={() => void resume(m.id)} title={m.tasks.length ? 'Continue from the finished tasks' : 'Start again with the same goal'}>
+                {m.tasks.length ? <><Play size={13} /> Resume</> : <><RotateCcw size={13} /> Run again</>}
+              </Button>
+            )}
+            {!live && m.baseCommit && m.headCommit && !m.undone && newest && (
+              <Button variant="ghost" onClick={() => confirm('Put the project back to how it was before this mission? This is saved as a new version, so it can be redone.') && void undo(m.id)} title="Restore the previous version">
+                <Undo2 size={13} /> Undo
               </Button>
             )}
           </div>
         </div>
+        {parent && (
+          <button onClick={() => void useMissions.getState().select(parent.id)} className="flex items-center gap-1 text-xs text-accent hover:underline">
+            <CornerDownRight size={12} /> Change to: {parent.product ?? parent.goal}
+          </button>
+        )}
+        {m.undone && <Badge tone="neutral">undone</Badge>}
         <Stepper m={m} />
       </header>
 
+      <PauseBanner m={m} />
       <TestButton m={m} />
-      {m.error && <div role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger">{m.error}</div>}
+      {(actionError || m.error) && <div role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger">{actionError ?? m.error}</div>}
+      {m.status === 'done' && newest && !m.undone && <ChangeBox m={m} />}
       <About m={m} />
 
       {m.tasks.length > 0 && (
         <section>
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">Tasks · {done}/{m.tasks.length} merged</h3>
-          <ul className="space-y-2">{m.tasks.map((t) => <TaskRow key={t.id} t={t} live={live} />)}</ul>
+          <ul className="space-y-2">{m.tasks.map((t) => <TaskRow key={t.id} t={t} live={live && m.status !== 'paused'} />)}</ul>
         </section>
       )}
 
@@ -370,7 +438,7 @@ export function MissionApp() {
                 onClick={() => void select(x.id)}
                 className={cx('w-full rounded-lg px-2.5 py-2 text-left', x.id === selected ? 'bg-accent-soft' : 'hover:bg-surface-3')}
               >
-                <div className={cx('line-clamp-2 text-[13px] font-medium', x.id === selected ? 'text-accent' : 'text-fg')}>{x.goal}</div>
+                <div className={cx('line-clamp-2 text-[13px] font-medium', x.id === selected ? 'text-accent' : 'text-fg')}>{x.parentId && <CornerDownRight size={11} className="mr-1 inline text-faint" />}{x.goal}</div>
                 <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
                   <StatusBadge status={x.status} />
                   <span className="truncate">{new Date(x.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>

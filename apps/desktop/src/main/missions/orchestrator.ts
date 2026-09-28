@@ -6,7 +6,8 @@ import {
 } from '@shared/missions';
 import { agentEnv } from '../env';
 import type { AgentManager, Reply } from '../agents/manager';
-import { classifyError } from '../agents/router';
+import { classifyError, shouldSwitch } from '../agents/router';
+import type { Net } from '../net';
 import type { Db } from '../store/db';
 import type { SettingsStore } from '../store/settings';
 import type { Gate } from '../tools/gate';
@@ -25,7 +26,9 @@ const LEVEL = {
 const MAX_MODEL_ATTEMPTS = 5;
 const MERGE_ATTEMPTS = 2;
 const CHECK_TIMEOUT_MS = 15 * 60_000;
-const ACTIVE = new Set(['planning', 'building', 'verifying', 'shipping']);
+const ACTIVE = new Set(['planning', 'building', 'verifying', 'shipping', 'paused']);
+const MAX_DROPS = 20;
+const alwaysOnline: Net = { online: async () => true, waitOnline: async () => {} };
 
 class Cancelled extends Error {}
 class OverBudget extends Error {}
@@ -66,10 +69,15 @@ export interface MissionDeps {
   workspacesChanged: () => void;
   record?: (m: Mission, workspacePath: string) => void;
   launcher?: Launcher;
+  net?: Net;
 }
 
 interface Ctl {
+  m: Mission;
   cancelled: boolean;
+  pauseRequested: boolean;
+  holding?: Promise<void>;
+  wake?: () => void;
 }
 
 export class Missions {
@@ -78,8 +86,11 @@ export class Missions {
   private overBudget = new Map<string, string>();
   private mergeChain: Promise<unknown> = Promise.resolve();
 
+  private net: Net;
+
   constructor(deps: MissionDeps) {
     this.d = deps;
+    this.net = deps.net ?? alwaysOnline;
   }
 
   list(): Mission[] {
@@ -96,12 +107,13 @@ export class Missions {
     return (this.d.db.prepare('SELECT mission_id AS missionId, ts, kind, text FROM mission_events WHERE mission_id = ? ORDER BY id').all(id) as unknown as MissionEvent[]);
   }
 
-  /** Missions that were running when the app quit can't be resumed mid-agent; mark them honestly. */
+  /** Agents can't survive an app restart; merged tasks can. Resume picks up from there. */
   recoverInterrupted() {
     for (const m of this.list()) {
       if (!ACTIVE.has(m.status)) continue;
       m.status = 'failed';
-      m.error = 'Interrupted: the app closed while this mission was running. Start it again to continue from the committed work.';
+      m.error = 'Interrupted: the app closed while this mission was running. Press Resume to continue from the finished tasks.';
+      m.pause = undefined;
       m.activeSessions = [];
       for (const t of m.tasks) if (!['done', 'failed'].includes(t.status)) t.status = 'cancelled';
       this.save(m);
@@ -113,24 +125,85 @@ export class Missions {
       ? this.d.workspaces.get(input.workspaceId)
       : await this.d.workspaces.create(nameFromGoal(input.goal));
     if (!input.workspaceId) this.d.workspacesChanged();
+    const parent = input.parentId ? this.get(input.parentId) : undefined;
     const now = new Date().toISOString();
     const m: Mission = {
-      id: randomUUID(), goal: input.goal, workspaceId: ws.id, workspaceName: ws.name, quality: input.quality ?? this.d.settings.get().quality,
+      id: randomUUID(), goal: input.goal, workspaceId: ws.id, workspaceName: ws.name, quality: input.quality ?? parent?.quality ?? this.d.settings.get().quality,
       status: 'planning', stage: 'plan', tasks: [], verify: {}, checks: [], fixRounds: 0, usage: { input: 0, output: 0, cached: 0 },
-      activeSessions: [], createdAt: now, updatedAt: now,
+      activeSessions: [], createdAt: now, updatedAt: now, parentId: parent?.id, baseCommit: await this.d.workspaces.head(ws.path).catch(() => undefined),
     };
     this.d.db.prepare('INSERT INTO missions (id, data, created_at, updated_at) VALUES (?, ?, ?, ?)').run(m.id, JSON.stringify(m), now, now);
-    this.ctl.set(m.id, { cancelled: false });
-    this.log(m, 'info', `Mission started in workspace "${ws.name}" (${m.quality === 'max' ? 'max quality' : 'balanced'}).`);
+    this.ctl.set(m.id, { m, cancelled: false, pauseRequested: false });
+    this.log(m, 'info', parent ? `Change request on "${parent.product ?? parent.goal}".` : `Mission started in workspace "${ws.name}" (${m.quality === 'max' ? 'max quality' : m.quality}).`);
     void this.run(m);
     return m;
+  }
+
+  /** Takes effect after the agents' current step, so no half-written turn is thrown away. */
+  pause(id: string) {
+    const c = this.ctl.get(id);
+    if (!c || c.cancelled) return;
+    c.pauseRequested = true;
+    const m = c.m;
+    if (!m.pause) {
+      m.pause = { reason: 'user', since: new Date().toISOString() };
+      this.save(m);
+    }
+  }
+
+  /** Wakes a paused mission, or continues a failed, cancelled or interrupted one from its finished tasks. */
+  async resume(id: string): Promise<Mission> {
+    const c = this.ctl.get(id);
+    if (c) {
+      c.pauseRequested = false;
+      c.wake?.();
+      const m = c.m;
+      if (m.pause && m.status !== 'paused') {
+        m.pause = undefined;
+        this.save(m);
+      }
+      return structuredClone(m);
+    }
+    const m = this.get(id);
+    if (ACTIVE.has(m.status) || m.status === 'done') return m;
+    if (!m.tasks.length) return this.start({ goal: m.goal, workspaceId: m.workspaceId, quality: m.quality, parentId: m.parentId });
+    await this.d.workspaces.pruneMissionWorktrees(m.workspaceId, m.id.slice(0, 6));
+    m.resumes = (m.resumes ?? 0) + 1;
+    m.status = 'building';
+    m.stage = 'build';
+    m.error = m.report = m.finishedAt = m.pause = undefined;
+    m.checks = [];
+    m.fixRounds = 0;
+    for (const t of m.tasks) {
+      if (t.status === 'done') continue;
+      Object.assign(t, { status: 'queued', rounds: 0, note: undefined, handoff: undefined, sessionId: undefined, coder: undefined, reviewer: undefined });
+    }
+    this.ctl.set(m.id, { m, cancelled: false, pauseRequested: false });
+    this.log(m, 'info', `Resumed: ${m.tasks.filter((t) => t.status === 'done').length}/${m.tasks.length} tasks already done.`);
+    this.save(m);
+    void this.run(m);
+    return m;
+  }
+
+  /** Only the newest change on a project can be undone, so later work is never silently dropped. */
+  async undo(id: string) {
+    const m = this.get(id);
+    if (ACTIVE.has(m.status) || !m.baseCommit || m.undone) throw new Error('This mission cannot be undone.');
+    const ws = this.d.workspaces.get(m.workspaceId);
+    const head = await this.d.workspaces.head(ws.path);
+    if (m.headCommit && head !== m.headCommit) throw new Error('Newer changes were made after this mission. Undo those first.');
+    await this.d.workspaces.restore(ws.path, m.baseCommit, `Undo: ${m.goal.slice(0, 60)}`);
+    m.undone = true;
+    this.log(m, 'info', 'Undone: the project is back to how it was before this mission.');
+    this.save(m);
   }
 
   cancel(id: string) {
     const c = this.ctl.get(id);
     if (!c) return;
     c.cancelled = true;
-    const m = this.get(id);
+    c.wake?.();
+    const m = c.m;
     for (const s of m.activeSessions) {
       void this.d.agents.cancel(s).catch(() => {});
       this.d.agents.stop(s);
@@ -154,6 +227,41 @@ export class Missions {
     if (this.ctl.get(m.id)?.cancelled) throw new Cancelled();
     const budget = this.overBudget.get(m.id);
     if (budget) throw new OverBudget(budget);
+  }
+
+  /**
+   * The one place a mission waits: for the user after Pause, or for the internet after a drop.
+   * Parallel tasks that hit it together share a single wait.
+   */
+  private async hold(m: Mission, offline = false) {
+    const c = this.ctl.get(m.id);
+    if (!c) return;
+    if (!c.holding && (offline || c.pauseRequested)) {
+      c.holding = (async () => {
+        const from = m.status === 'paused' ? 'building' : m.status;
+        const ac = new AbortController();
+        c.wake = () => ac.abort();
+        m.status = 'paused';
+        m.pause = { reason: offline ? 'offline' : 'user', since: new Date().toISOString() };
+        this.log(m, 'info', offline ? 'Connection lost. Paused; resumes by itself when you are back online, or press Resume.' : 'Paused. Press Resume to continue.');
+        this.save(m);
+        if (offline) await this.net.waitOnline(ac.signal);
+        else if (c.pauseRequested) await new Promise((r) => ac.signal.addEventListener('abort', r));
+        c.wake = c.holding = undefined;
+        c.pauseRequested = false;
+        m.status = from;
+        m.pause = undefined;
+        if (!c.cancelled) this.log(m, 'info', 'Resumed.');
+        this.save(m);
+      })();
+    }
+    await c.holding;
+    this.check(m);
+  }
+
+  /** True when the error is a dropped connection we should wait out rather than route around. */
+  private async offline(message: string | undefined) {
+    return !!message && classifyError(message) === 'network' && !(await this.net.online());
   }
 
   private addUsage(m: Mission, r: Reply) {
@@ -186,8 +294,9 @@ export class Missions {
   ): Promise<{ info: SessionInfo; reply: Reply }> {
     const exclude = new Set(opts.exclude);
     let lastError = '';
+    let drops = 0;
     for (let i = 0; i < MAX_MODEL_ATTEMPTS; i++) {
-      this.check(m);
+      await this.hold(m);
       const want = { quality: m.quality, complexity: opts.complexity, exclude };
       const ranked = await this.d.agents.candidates(role, { ...want, avoidVendor: opts.avoidVendor });
       // The dispatcher's pick goes first while it is still available (not excluded, limited or cooling).
@@ -201,6 +310,12 @@ export class Missions {
         info = await this.d.agents.start(role, { ref: { runtime: c.runtime, model: c.model }, quality: m.quality, complexity: opts.complexity, root, readOnly: opts.readOnly });
       } catch (e) {
         lastError = (e as Error).message;
+        if (drops < MAX_DROPS && (await this.offline(lastError))) {
+          drops++;
+          i--;
+          await this.hold(m, true);
+          continue;
+        }
         exclude.add(`${c.runtime}|${c.model}`);
         this.log(m, 'error', `${c.runtime}/${c.model} could not start: ${lastError}`);
         continue;
@@ -210,7 +325,17 @@ export class Missions {
       const reply = await this.d.agents.ask(info.id, prompt);
       this.addUsage(m, reply);
       this.check(m);
-      if (reply.error && classifyError(reply.error) !== 'other') {
+      if (drops < MAX_DROPS && (await this.offline(reply.error))) {
+        drops++;
+        i--;
+        this.stopSession(m, info.id);
+        await this.hold(m, true);
+        // Same model once the connection is back; a writer continues from the files it already wrote.
+        opts = { ...opts, prefer: { runtime: c.runtime, model: c.model } };
+        if (!opts.readOnly && !prompt.startsWith('The previous agent')) prompt = takeoverPrompt('the connection dropped', prompt);
+        continue;
+      }
+      if (reply.error && (shouldSwitch(reply.error) || classifyError(reply.error) === 'network')) {
         lastError = reply.error;
         exclude.add(`${c.runtime}|${c.model}`);
         this.stopSession(m, info.id);
@@ -224,20 +349,24 @@ export class Missions {
 
   private async run(m: Mission) {
     try {
-      const plan = await this.plan(m);
-      await this.dispatch(m);
+      if (!m.tasks.length) {
+        await this.plan(m);
+        await this.dispatch(m);
+      }
       m.status = 'building';
       m.stage = 'build';
       this.save(m);
-      await this.build(m, plan);
+      await this.build(m);
       const failedTasks = m.tasks.filter((t) => t.status === 'failed');
       if (failedTasks.length === m.tasks.length) throw new Error('Every task failed; see the task notes.');
 
+      await this.hold(m);
       m.status = 'verifying';
       m.stage = 'test';
       this.save(m);
       const ok = await this.verifyAndFix(m);
 
+      await this.hold(m);
       m.status = 'shipping';
       m.stage = 'ship';
       this.save(m);
@@ -247,6 +376,7 @@ export class Missions {
       this.stopSession(m, info.id);
       m.report = reply.text.trim();
       m.stats = await this.d.workspaces.stats(ws.path);
+      m.headCommit = await this.d.workspaces.head(ws.path);
       m.finishedAt = new Date().toISOString();
       m.status = ok && !failedTasks.length ? 'done' : 'failed';
       if (!ok) m.error = 'Checks still fail after automatic fixes. The report lists what is left.';
@@ -256,6 +386,7 @@ export class Missions {
       const cancelled = e instanceof Cancelled;
       if (e instanceof OverBudget) this.log(m, 'error', e.message);
       m.status = cancelled ? 'cancelled' : 'failed';
+      m.pause = undefined;
       if (!cancelled) m.error = (e as Error).message;
       this.overBudget.delete(m.id);
       for (const t of m.tasks) if (!['done', 'failed'].includes(t.status)) t.status = 'cancelled';
@@ -273,7 +404,8 @@ export class Missions {
 
   private async plan(m: Mission): Promise<Plan> {
     const ws = this.d.workspaces.get(m.workspaceId);
-    const { info, reply } = await this.askBest(m, 'plan', ws.path, planPrompt(m.goal, await this.d.workspaces.files(ws.path)), { readOnly: true });
+    const parent = m.parentId ? this.get(m.parentId) : undefined;
+    const { info, reply } = await this.askBest(m, 'plan', ws.path, planPrompt(m.goal, await this.d.workspaces.files(ws.path), parent), { readOnly: true });
     m.planner = info.ref;
     let parsed = PlanSchema.safeParse(extractJson(reply.text));
     if (!parsed.success) {
@@ -287,9 +419,9 @@ export class Missions {
     const ids = new Set(plan.tasks.map((t) => t.id));
     m.summary = plan.summary;
     m.verify = plan.verify;
-    m.product = plan.product;
-    m.stack = plan.stack;
-    m.run = plan.run;
+    m.product = plan.product ?? parent?.product;
+    m.stack = plan.stack ?? parent?.stack;
+    m.run = plan.run ?? parent?.run;
     m.tasks = plan.tasks.map((t) => ({ ...t, deps: t.deps.filter((d) => ids.has(d) && d !== t.id), status: 'queued', rounds: 0 }));
     this.dropCycles(m);
     this.log(m, 'plan', `${info.ref.model} planned ${m.tasks.length} task(s): ${m.tasks.map((t) => t.title).join('; ')}`);
@@ -360,10 +492,11 @@ export class Missions {
     for (const t of m.tasks) if (!state.has(t.id)) visit(t);
   }
 
-  private async build(m: Mission, plan: Plan) {
+  private async build(m: Mission) {
     const running = new Map<string, Promise<void>>();
     const max = this.d.settings.get().maxParallelAgents;
     for (;;) {
+      if (!running.size) await this.hold(m);
       this.check(m);
       for (const t of m.tasks) {
         const bad = t.deps.find((d) => ['failed', 'cancelled'].includes(m.tasks.find((x) => x.id === d)!.status));
@@ -376,7 +509,7 @@ export class Missions {
       for (const t of ready.slice(0, Math.max(0, max - running.size))) {
         running.set(
           t.id,
-          this.runTask(m, t, plan)
+          this.runTask(m, t)
             .catch((e) => {
               if (e instanceof Cancelled || e instanceof OverBudget) {
                 if (e instanceof OverBudget) this.overBudget.set(m.id, e.message);
@@ -415,18 +548,18 @@ export class Missions {
     return next;
   }
 
-  private async runTask(m: Mission, t: MissionTask, plan: Plan) {
+  private async runTask(m: Mission, t: MissionTask) {
     const ws = this.d.workspaces.get(m.workspaceId);
     let conflictNote = '';
     for (let attempt = 0; attempt < MERGE_ATTEMPTS; attempt++) {
       this.check(m);
-      const branch = `task/${t.id}-${m.id.slice(0, 6)}-${attempt}`;
+      const branch = `task/${t.id}-${m.id.slice(0, 6)}-${m.resumes ?? 0}${attempt}`;
       const base = (await git(ws.path, ['rev-parse', 'main'])).trim();
       const wt = await this.d.workspaces.addWorktree(m.workspaceId, branch);
       t.status = 'coding';
       this.save(m);
       const files = await this.d.workspaces.files(wt);
-      const brief = codePrompt(m.goal, plan.summary, t, files, conflictNote, teamBrief(m, t), handoffBrief(m, t.deps));
+      const brief = codePrompt(m.goal, m.summary ?? '', t, files, conflictNote, teamBrief(m, t), handoffBrief(m, t.deps));
       const { info, reply } = await this.askBest(m, 'code', wt, brief, { complexity: t.complexity, prefer: t.plannedCoder });
       let coderId = info.id;
       t.coder = info.ref;
@@ -471,12 +604,14 @@ export class Missions {
         const fix = await this.d.agents.ask(coderId, fixReviewPrompt(verdict.data.issues));
         this.addUsage(m, fix);
         let fixText = fix.text;
-        if (fix.error && classifyError(fix.error) !== 'other') {
-          // Coder hit a limit mid-task: the next best model picks up the same files and the same fixes.
+        const dropped = await this.offline(fix.error);
+        if (fix.error && (dropped || shouldSwitch(fix.error))) {
+          // Coder lost the connection or hit a limit mid-task: pick up the same files and the same fixes.
           this.stopSession(m, coderId);
+          if (dropped) await this.hold(m, true);
           const next = await this.askBest(m, 'code', wt, takeoverPrompt(fix.error.slice(0, 120), `${brief}\n\n${fixReviewPrompt(verdict.data.issues)}`), {
             complexity: t.complexity,
-            exclude: new Set([`${t.coder.runtime}|${t.coder.model}`]),
+            ...(dropped ? { prefer: t.coder } : { exclude: new Set([`${t.coder.runtime}|${t.coder.model}`]) }),
           });
           this.log(m, 'switch', `${t.title}: ${t.coder.model} stopped (${fix.error.slice(0, 80)}); ${next.info.ref.model} took over.`);
           coderId = next.info.id;
@@ -542,6 +677,11 @@ export class Missions {
       return true;
     }
     let res = await this.runChecks(m, ws.path, false);
+    // An install that failed because the connection dropped is not the code's fault: wait, then re-run.
+    for (let drops = 0; !res.ok && drops < MAX_DROPS && !(await this.net.online()); drops++) {
+      await this.hold(m, true);
+      res = await this.runChecks(m, ws.path, false);
+    }
     while (!res.ok && m.fixRounds < LEVEL[m.quality].fixRounds) {
       m.fixRounds++;
       this.log(m, 'fix', `Fix round ${m.fixRounds}: ${res.step.name} failed.`);
