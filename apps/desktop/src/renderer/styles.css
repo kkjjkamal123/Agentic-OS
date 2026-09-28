@@ -1,0 +1,152 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens. The renderer resolves Settings.theme ("system" follows the OS) and sets
+ * <html data-theme="light|dark">; main also sets nativeTheme so native dialogs match.
+ */
+:root {
+  --bg: #eef0f4;
+  --wall-1: #dfe4f2;
+  --wall-2: #e9e2f5;
+  --wall-3: #dcefeb;
+  --surface: #fcfcfe;
+  --surface-solid: #ffffff;
+  --surface-2: #f4f5f8;
+  --surface-3: #e9ebf0;
+  --border: rgb(15 18 30 / 0.1);
+  --border-strong: rgb(15 18 30 / 0.18);
+  --text: #12141c;
+  --text-muted: #5b6072;
+  --text-faint: #8a8fa1;
+  --accent: #6d4aff;
+  --accent-hover: #5c37f5;
+  --accent-soft: rgb(109 74 255 / 0.12);
+  --accent-fg: #ffffff;
+  --success: #12875f;
+  --success-soft: rgb(18 135 95 / 0.12);
+  --warning: #a86200;
+  --warning-soft: rgb(168 98 0 / 0.12);
+  --danger: #c7353a;
+  --danger-soft: rgb(199 53 58 / 0.1);
+  --shadow-window: 0 24px 60px -12px rgb(20 24 40 / 0.28), 0 0 0 1px rgb(15 18 30 / 0.08);
+  --shadow-dock: 0 12px 40px -8px rgb(20 24 40 / 0.25);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #0b0d12;
+  --wall-1: #141a2e;
+  --wall-2: #1d1433;
+  --wall-3: #0f2226;
+  --surface: #161922;
+  --surface-solid: #161922;
+  --surface-2: #1c2030;
+  --surface-3: #252a3b;
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.16);
+  --text: #e9ebf2;
+  --text-muted: #a1a7b9;
+  --text-faint: #6c7286;
+  --accent: #8b6cff;
+  --accent-hover: #9d82ff;
+  --accent-soft: rgb(139 108 255 / 0.16);
+  --accent-fg: #ffffff;
+  --success: #3ccf91;
+  --success-soft: rgb(60 207 145 / 0.14);
+  --warning: #f0a93b;
+  --warning-soft: rgb(240 169 59 / 0.14);
+  --danger: #ff6b6f;
+  --danger-soft: rgb(255 107 111 / 0.14);
+  --shadow-window: 0 30px 80px -16px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.07);
+  --shadow-dock: 0 16px 50px -10px rgb(0 0 0 / 0.65);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-solid: var(--surface-solid);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+input,
+textarea,
+select,
+[data-selectable] {
+  user-select: text;
+}
+
+.wallpaper {
+  background:
+    radial-gradient(1200px 700px at 12% 8%, var(--wall-2), transparent 60%),
+    radial-gradient(900px 600px at 88% 20%, var(--wall-3), transparent 60%),
+    radial-gradient(1100px 800px at 50% 110%, var(--wall-1), transparent 65%),
+    var(--bg);
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}

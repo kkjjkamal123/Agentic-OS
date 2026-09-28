@@ -1,0 +1,25 @@
+{
+  "name": "brain-sync",
+  "version": "0.1.0",
+  "description": "Mirrors every project, file and AI session into one linked Obsidian vault",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "brain-sync": "bin/brain-sync.js"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "sync": "node src/cli.ts sync"
+  },
+  "dependencies": {
+    "ignore": "^7.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

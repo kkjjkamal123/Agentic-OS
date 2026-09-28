@@ -1,0 +1,26 @@
+appId: app.agentic-os
+productName: Agentic OS
+electronVersion: 44.4.5
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-darwin-*/**"
+asar: true
+asarUnpack:
+  - "**/node_modules/@agentclientprotocol/**"
+  - "**/node_modules/@anthropic-ai/claude-agent-sdk/**"
+  - "**/node_modules/zod/**"
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  identity: null
+  extendInfo:
+    NSAppleEventsUsageDescription: Agentic OS opens Terminal so you can sign in to agent CLIs.
+dmg:
+  title: Agentic OS
