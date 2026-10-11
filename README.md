@@ -30,7 +30,7 @@ review each other's work across vendors, run real checks, and ship a finished pr
 
 | | |
 |---|---|
-| **Agentic OS 0.1.0** | [`Agentic OS-0.1.0-arm64.dmg`](../../releases/latest) from the Releases page |
+| **Agentic OS 0.1.0** | [`Agentic-OS-0.1.0-arm64.dmg`](../../releases/latest) from the Releases page |
 | **Requires** | macOS on Apple silicon (built and used on macOS 27). Node ≥ 24 only if you build from source |
 | **Not available for** | Windows or Linux builds (the electron-builder config targets macOS arm64 only; it relies on the macOS sandbox, Keychain and notifications) |
 
@@ -115,7 +115,7 @@ The screenshots above (except Mission Control) were taken by that e2e run, drivi
 
 ## Using it
 
-1. **Install**: download `Agentic OS-0.1.0-arm64.dmg` from [Releases](../../releases/latest), open it and drag the app to Applications. Or, from the repo, run `npm run dev`.
+1. **Install**: download `Agentic-OS-0.1.0-arm64.dmg` from [Releases](../../releases/latest), open it and drag the app to Applications. Or, from the repo, run `npm run dev`.
 2. **Mission Control** (the first icon in the dock) is the main place to work. Type what you want built and press **Launch mission**. The "Your agents" card shows which subscriptions are ready. Click **Sign in…** for any that aren't.
 3. While it runs, each task shows which model is coding and which is reviewing. **Terminal** shows every command that runs, and **Files** shows the code and the diffs.
 4. If something risky or outside the project needs your OK, a card pops up top-right. Everything else runs on its own.
