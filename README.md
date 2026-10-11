@@ -1,11 +1,105 @@
-# Agentic OS
+<div align="center">
 
-A native macOS desktop "operating system" for AI agents. You describe a goal. Claude, GPT, Gemini, local Ollama models and CLI agents (Claude Code, Codex, omp) then plan it, build it, review each other's work, test it and ship a finished project. The whole time, everything is mirrored into your Obsidian **Brain** vault.
+# 🛰️ Agentic OS
 
+**A macOS desktop "operating system" for AI agents.**
+Describe a goal. Claude, GPT, Gemini, local Ollama models and CLI agents (Claude Code, Codex, omp) plan it, build it in parallel,
+review each other's work across vendors, run real checks, and ship a finished project you can test with one click.
+
+[![Download](https://img.shields.io/badge/Download-v0.1.0%20(.dmg)-7c5cff?style=for-the-badge&logo=apple)](../../releases/latest)
+![Unit tests](https://img.shields.io/badge/unit%20tests-90%20passing-brightgreen?style=for-the-badge)
+![E2E](https://img.shields.io/badge/e2e-9%2F9%20passing-brightgreen?style=for-the-badge)
+
+![Platform](https://img.shields.io/badge/macOS-Apple%20silicon-black?logo=apple)
+![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![Node](https://img.shields.io/badge/Node-%E2%89%A524-339933?logo=node.js&logoColor=white)
+
+<br>
+
+<img src="docs/screenshots/mission-control.jpg" width="900" alt="Mission Control with connected agents">
+
+*Mission Control: type a goal, pick a usage level, launch. "Your agents" shows the subscriptions that are signed in and ready.*
+
+</div>
+
+---
+
+## Download
+
+| | |
+|---|---|
+| **Agentic OS 0.1.0** | [`Agentic OS-0.1.0-arm64.dmg`](../../releases/latest) from the Releases page |
+| **Requires** | macOS on Apple silicon (built and used on macOS 27). Node ≥ 24 only if you build from source |
+| **Not available for** | Windows or Linux builds (the electron-builder config targets macOS arm64 only; it relies on the macOS sandbox, Keychain and notifications) |
+
+Open the DMG and drag **Agentic OS** to Applications. It isn't code-signed, so the first launch needs **right-click → Open**.
+You'll need at least one agent: a Claude Code, Codex or omp subscription, an API key (Anthropic, OpenAI, Gemini, OpenRouter, NVIDIA NIM), or a local Ollama model.
+
+## Screenshots
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/mission-done.jpg" alt="Finished mission"><br><b>A shipped mission</b>: plan → build → review → test → ship, with the ▶ Test button, product stack, run time and size</td>
+<td width="50%"><img src="docs/screenshots/change-request.jpg" alt="Change request"><br><b>Ask for changes</b>: the planner sees the existing product and plans only the change; Undo restores the previous version</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/approval.jpg" alt="Approval gate"><br><b>Approval gate</b>: anything risky (here a <code>git push</code>) pops up for Deny / Allow once / Allow for session</td>
+<td><img src="docs/screenshots/agents.jpg" alt="Agents window"><br><b>Agents</b>: chat with any one model directly, with streaming, thinking and tool calls</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/terminal.jpg" alt="Terminal"><br><b>Terminal</b>: every command an agent runs, with exit codes</td>
+<td><img src="docs/screenshots/files.jpg" alt="Files"><br><b>Files</b>: the workspace's code and diffs</td>
+</tr>
+<tr>
+<td colspan="2" align="center"><img src="docs/screenshots/settings-usage.jpg" width="640" alt="Agents and safety settings"><br><b>Agents & safety</b>: approval policy, usage level (Saver / Balanced / Max quality) and token budget per mission</td>
+</tr>
+</table>
+
+## How a mission runs
+
+```mermaid
+flowchart LR
+    G["🎯 Goal"] --> P["Planner<br/>splits into tasks"]
+    P --> D["Dispatcher<br/>coder + reviewer per task<br/>(different vendors)"]
+    D --> B1["Build task A<br/>own git worktree"]
+    D --> B2["Build task B<br/>own git worktree"]
+    B1 --> R1["Cross-vendor review"]
+    B2 --> R2["Cross-vendor review"]
+    R1 --> M["Merge"]
+    R2 --> M
+    M --> C{"Real checks<br/>build · launch · off-screen probe"}
+    C -- fail --> F["Auto-fix loop"] --> C
+    C -- pass --> S["🚀 Ship report + ▶ Test"]
+    S --> O[("Obsidian Brain vault")]
+    X["Rate limit / outage"] -. fallback model .-> B1
+    A["Risky command"] -. approval gate .-> U(("You"))
 ```
-packages/brain-sync/   Obsidian vault sync (live: hooks + background watcher)
-apps/desktop/          Electron app — the OS itself
+
+## Proof
+
+Both test suites pass on the 0.1.0 build:
+
+```text
+$ npm test
+ Test Files  13 passed | 2 skipped (15)
+      Tests  90 passed | 7 skipped (97)        # the 7 skipped are opt-in tests that spend real tokens
+
+$ npm run test:e2e                             # builds, then drives the real Electron app with Playwright
+  ✓ agents app routes, streams, and cancels
+  ✓ a mission plans, builds in parallel, reviews, checks and ships
+  ✓ desktop shell › boots with Mission Control open and a full dock
+  ✓ desktop shell › windows open, focus, minimize, maximize and close
+  ✓ desktop shell › dragging the title bar moves a window
+  ✓ desktop shell › settings persist through the main process and SQLite
+  ✓ desktop shell › API keys are stored but never readable from the renderer
+  ✓ desktop shell › state survives a restart
+  ✓ workspace, gated agent commands, terminal feed, approvals, files
+  9 passed (26.2s)
 ```
+
+The screenshots above (except Mission Control) were taken by that e2e run, driving the real app with a fake agent so no tokens are spent.
 
 ## Status
 
@@ -21,7 +115,7 @@ apps/desktop/          Electron app — the OS itself
 
 ## Using it
 
-1. **Install**: open `apps/desktop/dist/Agentic OS-0.1.0-arm64.dmg` and drag the app to Applications. Or, from the repo, run `npm run dev`.
+1. **Install**: download `Agentic OS-0.1.0-arm64.dmg` from [Releases](../../releases/latest), open it and drag the app to Applications. Or, from the repo, run `npm run dev`.
 2. **Mission Control** (the first icon in the dock) is the main place to work. Type what you want built and press **Launch mission**. The "Your agents" card shows which subscriptions are ready. Click **Sign in…** for any that aren't.
 3. While it runs, each task shows which model is coding and which is reviewing. **Terminal** shows every command that runs, and **Files** shows the code and the diffs.
 4. If something risky or outside the project needs your OK, a card pops up top-right. Everything else runs on its own.
@@ -99,3 +193,7 @@ What we borrowed, and how it fits Agentic OS's priorities (simple to operate, ea
 | Zero-token coordination | bernstein | Scheduling, merging and checks are plain code; only the dispatcher is a (cheap) model call |
 
 Not adopted, on purpose: Kanban boards and multi-pane terminals (more to operate), mobile push relays (always-on network), GPU-accelerated terminals (battery).
+
+---
+
+Made by **Kamalesh VS** · [github.com/kkjjkamal123](https://github.com/kkjjkamal123) · [kkjj.me](https://kkjj.me)
